@@ -153,6 +153,34 @@ Model:     deepseek-ai/DeepSeek-V4-Pro</code></pre>
 API Key:   sk-no-needed
 Model ID:  deepseek-ai/DeepSeek-V4-Pro</code></pre>
 
+<h3>OpenClaw</h3>
+<p><code>Settings → Model Providers → Add OpenAI Compatible</code>：</p>
+<pre><code>Name:      ModelScope DeepSeek V4
+Base URL:  https://你的域名/api/chat
+API Key:   sk-no-needed
+Model:     deepseek-ai/DeepSeek-V4-Pro</code></pre>
+<p>如果开启了外部 API Key 鉴权，把 <code>sk-no-needed</code> 换成你设置的 Key。</p>
+
+<h3>QwenPaw</h3>
+<p>在 <code>.env</code> 或环境变量中配置：</p>
+<pre><code># 使用代理作为 OpenAI 兼容后端
+OPENAI_BASE_URL=https://你的域名/api/chat
+OPENAI_API_KEY=sk-no-needed
+OPENAI_MODEL=deepseek-ai/DeepSeek-V4-Pro</code></pre>
+<p>如果是 QwenPaw Agent 配置，编辑 <code>agents.yaml</code> 或对应 agent 的 provider 配置：</p>
+<pre><code>provider: openai_compatible
+provider_config:
+  base_url: https://你的域名/api/chat
+  api_key: sk-no-needed
+  model: deepseek-ai/DeepSeek-V4-Pro</code></pre>
+
+<h3>流式调用 (SSE)</h3>
+<p>所有接入方式都<strong>原生支持流式</strong>，只需在请求体加 <code>"stream":true</code>。代理会<strong>透传 SSE 事件流</strong>，延迟几乎为零。</p>
+<pre><code># 流式 curl — 实时逐字输出
+curl -N https://你的域名/api/chat \
+  -H "Content-Type: application/json" \
+  -d '{"model":"deepseek-ai/DeepSeek-V4-Pro","messages":[{"role":"user","content":"用 TypeScript 写一个快排"}],"stream":true}'</code></pre>
+
 <h3>curl 命令行</h3>
 <pre><code># 非流式
 curl https://你的域名/api/chat \
@@ -180,7 +208,26 @@ response = client.chat.completions.create(
 for chunk in response:
     print(chunk.choices[0].delta.content or "", end="")</code></pre>
 
-<div class="note">💡 <strong>提示：</strong>客户端不需要传真实的 API Key，代理会自动从 Key 池中选取最优的一把来调用 ModelScope。</div>
+<div class="note">💡 <strong>提示：</strong>客户端不需要传 ModelScope 的真实 Key，代理自动从 Key 池中选取。默认无需鉴权；如需保护代理不被他人滥用，见下方「外部 API Key 鉴权」。</div>
+
+<h2>🔐 外部 API Key 鉴权</h2>
+<p>如果你把代理暴露在公网，建议设置一个对外 API Key 防止被刷：</p>
+
+<h3>1. 设置 Key</h3>
+<p>在 Vercel 项目 → Settings → Environment Variables 中添加：</p>
+<pre><code>API_KEY = sk-你自定义的密钥</code></pre>
+<p>重新部署后生效。</p>
+
+<h3>2. 客户端使用</h3>
+<p>所有工具的 <strong>API Key</strong> 字段从 <code>sk-no-needed</code> 换成 <code>sk-你自定义的密钥</code>：</p>
+<pre><code># curl 示例
+curl https://你的域名/api/chat \
+  -H "Authorization: Bearer sk-你自定义的密钥" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"deepseek-ai/DeepSeek-V4-Pro","messages":[{"role":"user","content":"你好"}]}'</code></pre>
+
+<h3>3. 不设置</h3>
+<p>不设 <code>API_KEY</code> 环境变量时，代理不做鉴权，任何人可调用（适合内网或只有自己用的场景）。</p>
 
 <h2>⚙️ 工作原理</h2>
 
