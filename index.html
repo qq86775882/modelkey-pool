@@ -134,29 +134,29 @@ td{border-bottom:1px solid rgba(30,42,66,.5)}tr:hover td{background:rgba(99,102,
     <div class="docs">
 
 <h2>🚀 快速接入</h2>
-<p>将你日常使用的 AI 工具的 <strong>Base URL</strong> 指向代理地址即可，API Key 随便填。</p>
+<p>将你日常使用的 AI 工具的 <strong>Base URL</strong> 设置为 <code>https://你的域名/v1</code>，API Key 随便填即可。</p>
 
 <h3>Cherry Studio / ChatBox / NextChat</h3>
-<pre><code>API 地址:  https://你的域名/api/chat
+<pre><code>API 地址:  https://你的域名/v1
 API Key:   sk-no-needed（随便填）
 模型名:    deepseek-ai/DeepSeek-V4-Pro</code></pre>
 
 <h3>Cursor</h3>
 <p><code>Settings → Models → OpenAI API Key</code> 里：</p>
-<pre><code>Base URL:  https://你的域名/api/chat
+<pre><code>Base URL:  https://你的域名/v1
 API Key:   sk-no-needed
 Model:     deepseek-ai/DeepSeek-V4-Pro</code></pre>
 
 <h3>Cline (VS Code 插件)</h3>
 <p><code>设置 → API Provider → OpenAI Compatible</code>：</p>
-<pre><code>Base URL:  https://你的域名/api/chat
+<pre><code>Base URL:  https://你的域名/v1
 API Key:   sk-no-needed
 Model ID:  deepseek-ai/DeepSeek-V4-Pro</code></pre>
 
 <h3>OpenClaw</h3>
 <p><code>Settings → Model Providers → Add OpenAI Compatible</code>：</p>
 <pre><code>Name:      ModelScope DeepSeek V4
-Base URL:  https://你的域名/api/chat
+Base URL:  https://你的域名/v1
 API Key:   sk-no-needed
 Model:     deepseek-ai/DeepSeek-V4-Pro</code></pre>
 <p>如果开启了外部 API Key 鉴权，把 <code>sk-no-needed</code> 换成你设置的 Key。</p>
@@ -164,31 +164,31 @@ Model:     deepseek-ai/DeepSeek-V4-Pro</code></pre>
 <h3>QwenPaw</h3>
 <p>在 <code>.env</code> 或环境变量中配置：</p>
 <pre><code># 使用代理作为 OpenAI 兼容后端
-OPENAI_BASE_URL=https://你的域名/api/chat
+OPENAI_BASE_URL=https://你的域名/v1
 OPENAI_API_KEY=sk-no-needed
 OPENAI_MODEL=deepseek-ai/DeepSeek-V4-Pro</code></pre>
 <p>如果是 QwenPaw Agent 配置，编辑 <code>agents.yaml</code> 或对应 agent 的 provider 配置：</p>
 <pre><code>provider: openai_compatible
 provider_config:
-  base_url: https://你的域名/api/chat
+  base_url: https://你的域名/v1
   api_key: sk-no-needed
   model: deepseek-ai/DeepSeek-V4-Pro</code></pre>
 
 <h3>流式调用 (SSE)</h3>
 <p>所有接入方式都<strong>原生支持流式</strong>，只需在请求体加 <code>"stream":true</code>。代理会<strong>透传 SSE 事件流</strong>，延迟几乎为零。</p>
 <pre><code># 流式 curl — 实时逐字输出
-curl -N https://你的域名/api/chat \
+curl -N https://你的域名/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{"model":"deepseek-ai/DeepSeek-V4-Pro","messages":[{"role":"user","content":"用 TypeScript 写一个快排"}],"stream":true}'</code></pre>
 
 <h3>curl 命令行</h3>
 <pre><code># 非流式
-curl https://你的域名/api/chat \
+curl https://你的域名/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{"model":"deepseek-ai/DeepSeek-V4-Pro","messages":[{"role":"user","content":"你好"}]}'
 
 # 流式 (SSE)
-curl https://你的域名/api/chat \
+curl https://你的域名/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{"model":"deepseek-ai/DeepSeek-V4-Pro","messages":[{"role":"user","content":"你好"}],"stream":true}'</code></pre>
 
@@ -196,7 +196,7 @@ curl https://你的域名/api/chat \
 <pre><code>from openai import OpenAI
 
 client = OpenAI(
-    base_url="https://你的域名/api/chat",
+    base_url="https://你的域名/v1",
     api_key="sk-no-needed"
 )
 
@@ -219,9 +219,9 @@ for chunk in response:
 <p>重新部署后生效。</p>
 
 <h3>2. 客户端使用</h3>
-<p>所有工具的 <strong>API Key</strong> 字段从 <code>sk-no-needed</code> 换成 <code>sk-你自定义的密钥</code>：</p>
+<p>所有工具的 <strong>Base URL</strong> 不变（<code>/v1</code>），只需把 API Key 从 <code>sk-no-needed</code> 换成你设置的密钥：</p>
 <pre><code># curl 示例
-curl https://你的域名/api/chat \
+curl https://你的域名/v1/chat/completions \
   -H "Authorization: Bearer sk-你自定义的密钥" \
   -H "Content-Type: application/json" \
   -d '{"model":"deepseek-ai/DeepSeek-V4-Pro","messages":[{"role":"user","content":"你好"}]}'</code></pre>
@@ -255,8 +255,8 @@ curl https://你的域名/api/chat \
 
 <h2>📡 API 参考</h2>
 
-<h3><code>POST /api/chat</code> — 聊天代理（OpenAI 兼容）</h3>
-<p>完全兼容 OpenAI <code>/v1/chat/completions</code> 格式。支持 <code>stream: true</code>。</p>
+<h3><code>POST /v1/chat/completions</code> — 聊天代理（OpenAI 兼容）</h3>
+<p>完全兼容 OpenAI <code>/v1/chat/completions</code> 格式。也支持原始路径 <code>/api/chat</code>。支持 <code>stream: true</code>。</p>
 <p>响应头 <code>X-Key-Pool-Key</code> 会显示本次使用了哪把 Key（脱敏）。</p>
 
 <h3><code>GET /api/keys</code> — 获取 Key 池状态</h3>
