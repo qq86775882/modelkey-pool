@@ -1,0 +1,474 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ModelKey Pool — 管理面板</title>
+<style>
+  :root {
+    --bg: #0b0f19;
+    --card: #131a2b;
+    --border: #1e2a42;
+    --text: #e2e8f0;
+    --muted: #8892b0;
+    --accent: #6366f1;
+    --accent2: #818cf8;
+    --green: #22c55e;
+    --red: #ef4444;
+    --orange: #f59e0b;
+    --blue: #3b82f6;
+    --radius: 10px;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+  .container { max-width: 1100px; margin: 0 auto; padding: 24px 20px; }
+
+  /* Header */
+  header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 28px; flex-wrap: wrap; gap: 12px; }
+  header h1 { font-size: 1.8rem; font-weight: 700; background: linear-gradient(135deg, var(--accent2), #a78bfa); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+  .badge { display: inline-flex; align-items: center; gap: 6px; background: var(--card); border: 1px solid var(--border); border-radius: 20px; padding: 6px 14px; font-size: .85rem; color: var(--muted); }
+  .badge .dot { width: 8px; height: 8px; border-radius: 50%; }
+  .dot.green { background: var(--green); }
+  .dot.red { background: var(--red); }
+  .dot.orange { background: var(--orange); }
+
+  /* Stats row */
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; margin-bottom: 28px; }
+  .stat-card { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 18px 20px; }
+  .stat-card .label { font-size: .8rem; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; margin-bottom: 6px; }
+  .stat-card .value { font-size: 1.8rem; font-weight: 700; }
+  .stat-card .value.green { color: var(--green); }
+  .stat-card .value.blue { color: var(--blue); }
+  .stat-card .value.orange { color: var(--orange); }
+
+  /* Tabs */
+  .tabs { display: flex; gap: 0; margin-bottom: 20px; border-bottom: 2px solid var(--border); }
+  .tab { padding: 10px 20px; cursor: pointer; border: none; background: none; color: var(--muted); font-size: .95rem; border-bottom: 2px solid transparent; margin-bottom: -2px; transition: .2s; }
+  .tab:hover { color: var(--text); }
+  .tab.active { color: var(--accent2); border-bottom-color: var(--accent2); }
+
+  /* Panels */
+  .panel { display: none; }
+  .panel.active { display: block; }
+
+  /* Table */
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { padding: 12px 14px; text-align: left; font-size: .9rem; }
+  th { color: var(--muted); font-weight: 600; text-transform: uppercase; font-size: .75rem; letter-spacing: .5px; border-bottom: 1px solid var(--border); }
+  td { border-bottom: 1px solid rgba(30,42,66,.5); }
+  tr:hover td { background: rgba(99,102,241,.05); }
+  .key-cell { font-family: 'SF Mono', 'Fira Code', monospace; font-size: .82rem; }
+  .status-tag { display: inline-block; padding: 3px 10px; border-radius: 12px; font-size: .75rem; font-weight: 600; }
+  .status-tag.ok { background: rgba(34,197,94,.15); color: var(--green); }
+  .status-tag.warn { background: rgba(245,158,11,.15); color: var(--orange); }
+  .status-tag.err { background: rgba(239,68,68,.15); color: var(--red); }
+  .status-tag.exhausted { background: rgba(239,68,68,.15); color: var(--red); }
+  .progress-bar { width: 100%; height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; margin-top: 4px; }
+  .progress-fill { height: 100%; border-radius: 3px; transition: width .5s; }
+  .progress-fill.safe { background: var(--green); }
+  .progress-fill.warn { background: var(--orange); }
+  .progress-fill.danger { background: var(--red); }
+  .actions { display: flex; gap: 6px; }
+
+  /* Buttons */
+  .btn { padding: 8px 16px; border: none; border-radius: 6px; font-size: .85rem; cursor: pointer; font-weight: 600; transition: .2s; display: inline-flex; align-items: center; gap: 6px; }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-primary:hover { background: var(--accent2); }
+  .btn-outline { background: transparent; border: 1px solid var(--border); color: var(--text); }
+  .btn-outline:hover { border-color: var(--accent2); color: var(--accent2); }
+  .btn-danger { background: rgba(239,68,68,.15); color: var(--red); border: 1px solid rgba(239,68,68,.3); }
+  .btn-danger:hover { background: rgba(239,68,68,.25); }
+  .btn-sm { padding: 5px 10px; font-size: .78rem; }
+  .btn-xs { padding: 3px 8px; font-size: .72rem; }
+
+  /* Forms */
+  .form-group { margin-bottom: 16px; }
+  .form-group label { display: block; font-size: .82rem; color: var(--muted); margin-bottom: 6px; font-weight: 600; }
+  .form-group input, .form-group textarea { width: 100%; padding: 10px 14px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-size: .9rem; font-family: inherit; }
+  .form-group input:focus, .form-group textarea:focus { outline: none; border-color: var(--accent2); box-shadow: 0 0 0 3px rgba(99,102,241,.15); }
+  .form-row { display: flex; gap: 10px; }
+  .form-row .form-group { flex: 1; }
+
+  /* Toast */
+  .toast-container { position: fixed; top: 16px; right: 16px; z-index: 1000; display: flex; flex-direction: column; gap: 8px; }
+  .toast { padding: 12px 18px; border-radius: 8px; color: #fff; font-size: .88rem; animation: slideIn .3s; max-width: 400px; box-shadow: 0 8px 24px rgba(0,0,0,.4); }
+  .toast.success { background: #16a34a; }
+  .toast.error { background: #dc2626; }
+  @keyframes slideIn { from { opacity: 0; transform: translateX(50px); } to { opacity: 1; transform: translateX(0); } }
+
+  /* Modal */
+  .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.6); display: flex; align-items: center; justify-content: center; z-index: 999; }
+  .modal { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 24px; width: 90%; max-width: 500px; }
+  .modal h3 { margin-bottom: 16px; }
+  .modal .btn-row { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+
+  /* Test result */
+  .test-result { margin-top: 16px; padding: 16px; border-radius: 8px; border: 1px solid var(--border); }
+  .test-result.success { border-color: rgba(34,197,94,.4); background: rgba(34,197,94,.08); }
+  .test-result.fail { border-color: rgba(239,68,68,.4); background: rgba(239,68,68,.08); }
+  .test-result .reply { padding: 10px; background: var(--bg); border-radius: 6px; margin-top: 8px; font-size: .88rem; white-space: pre-wrap; }
+
+  /* Loading spinner */
+  .spinner { width: 18px; height: 18px; border: 2px solid var(--border); border-top-color: var(--accent2); border-radius: 50%; animation: spin .6s linear infinite; display: inline-block; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* Empty state */
+  .empty { text-align: center; padding: 60px 20px; color: var(--muted); }
+  .empty .icon { font-size: 3rem; margin-bottom: 12px; }
+  .empty p { font-size: .95rem; }
+
+  /* Auto-refresh indicator */
+  .auto-refresh { font-size: .75rem; color: var(--muted); display: flex; align-items: center; gap: 4px; }
+
+  @media (max-width: 600px) {
+    .stats { grid-template-columns: 1fr 1fr; }
+    .form-row { flex-direction: column; }
+  }
+</style>
+</head>
+<body>
+
+<div class="toast-container" id="toasts"></div>
+
+<div class="container">
+  <!-- Header -->
+  <header>
+    <div>
+      <h1>🔑 ModelKey Pool</h1>
+      <span style="color:var(--muted);font-size:.85rem;">ModelScope DeepSeek-V4-Pro 多 Key 轮换代理</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:10px;">
+      <span class="auto-refresh" id="refresh-indicator">🔄 自动刷新中</span>
+      <span class="badge" id="health-badge"><span class="dot green"></span> 运行中</span>
+    </div>
+  </header>
+
+  <!-- Stats -->
+  <div class="stats">
+    <div class="stat-card">
+      <div class="label">Key 总数</div>
+      <div class="value blue" id="stat-total">-</div>
+    </div>
+    <div class="stat-card">
+      <div class="label">可用 Key</div>
+      <div class="value green" id="stat-available">-</div>
+    </div>
+    <div class="stat-card">
+      <div class="label">日限额 / 把</div>
+      <div class="value" id="stat-limit">-</div>
+    </div>
+    <div class="stat-card">
+      <div class="label">理论日总量</div>
+      <div class="value orange" id="stat-capacity">-</div>
+    </div>
+  </div>
+
+  <!-- Tabs -->
+  <div class="tabs">
+    <button class="tab active" data-tab="keys">🔑 Key 列表</button>
+    <button class="tab" data-tab="add">➕ 添加 Key</button>
+    <button class="tab" data-tab="test">🧪 测试 Key</button>
+  </div>
+
+  <!-- Keys Panel -->
+  <div class="panel active" id="panel-keys">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+      <h3 style="font-weight:600;">所有 Key</h3>
+      <button class="btn btn-outline btn-sm" onclick="refreshData()">🔄 刷新</button>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Key</th><th>今日用量</th><th>状态</th><th>总请求</th><th>429次数</th><th>操作</th></tr>
+        </thead>
+        <tbody id="keys-tbody"><tr><td colspan="6"><div class="empty"><div class="spinner"></div><p style="margin-top:12px;">加载中...</p></div></td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Add Panel -->
+  <div class="panel" id="panel-add">
+    <h3 style="font-weight:600;margin-bottom:16px;">添加新 Key</h3>
+    <div class="form-group">
+      <label>API Key（以 ms- 开头）</label>
+      <input type="text" id="add-key-input" placeholder="ms-xxxxxxxxxxxxxxxx">
+    </div>
+    <button class="btn btn-primary" onclick="addKey()">➕ 添加</button>
+    <p style="color:var(--muted);font-size:.8rem;margin-top:10px;">添加后会自动保存到 keys.json，重启不丢失。</p>
+  </div>
+
+  <!-- Test Panel -->
+  <div class="panel" id="panel-test">
+    <h3 style="font-weight:600;margin-bottom:16px;">测试 Key 可用性</h3>
+    <div class="form-group">
+      <label>API Key</label>
+      <input type="text" id="test-key-input" placeholder="ms-xxxxxxxxxxxxxxxx">
+    </div>
+    <div class="form-group">
+      <label>模型</label>
+      <input type="text" id="test-model-input" value="deepseek-ai/DeepSeek-V4-Pro">
+    </div>
+    <div class="form-group">
+      <label>测试消息</label>
+      <input type="text" id="test-msg-input" value="Hello, reply with just OK.">
+    </div>
+    <button class="btn btn-primary" id="test-btn" onclick="testKey()">🧪 开始测试</button>
+    <div id="test-result"></div>
+  </div>
+</div>
+
+<!-- Edit Modal (hidden by default) -->
+<div class="modal-overlay" id="edit-modal" style="display:none;">
+  <div class="modal">
+    <h3>✏️ 编辑 Key</h3>
+    <div class="form-group">
+      <label>当前 Key</label>
+      <input type="text" id="edit-old-key" readonly style="opacity:.6;">
+    </div>
+    <div class="form-group">
+      <label>新 Key</label>
+      <input type="text" id="edit-new-key" placeholder="ms-xxxxxxxxxxxxxxxx">
+    </div>
+    <div class="btn-row">
+      <button class="btn btn-outline" onclick="closeEditModal()">取消</button>
+      <button class="btn btn-primary" onclick="updateKey()">💾 保存</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ==================== 工具函数 ====================
+
+const API = '';  // 同源
+
+function toast(msg, type='success') {
+  const el = document.createElement('div');
+  el.className = `toast ${type}`;
+  el.textContent = msg;
+  document.getElementById('toasts').appendChild(el);
+  setTimeout(() => el.remove(), 3000);
+}
+
+function progressClass(used, limit) {
+  const pct = used / limit;
+  if (pct >= 1) return 'danger';
+  if (pct >= 0.8) return 'warn';
+  return 'safe';
+}
+
+function pct(used, limit) {
+  return Math.min(100, (used / limit) * 100);
+}
+
+// ==================== Tabs ====================
+
+document.querySelectorAll('.tab').forEach(t => {
+  t.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
+    document.querySelectorAll('.panel').forEach(x => x.classList.remove('active'));
+    t.classList.add('active');
+    document.getElementById('panel-' + t.dataset.tab).classList.add('active');
+  });
+});
+
+// ==================== Edit Modal ====================
+
+function openEditModal(masked, fullKey) {
+  document.getElementById('edit-old-key').value = masked;
+  document.getElementById('edit-old-key').dataset.fullKey = fullKey;
+  document.getElementById('edit-new-key').value = '';
+  document.getElementById('edit-modal').style.display = 'flex';
+}
+
+function closeEditModal() {
+  document.getElementById('edit-modal').style.display = 'none';
+}
+
+async function updateKey() {
+  const oldKey = document.getElementById('edit-old-key').dataset.fullKey;
+  const newKey = document.getElementById('edit-new-key').value.trim();
+  if (!newKey) { toast('请输入新 Key', 'error'); return; }
+  try {
+    const r = await fetch(API + '/api/keys', {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({old_key: oldKey, new_key: newKey})
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.detail || '更新失败');
+    toast('Key 更新成功');
+    closeEditModal();
+    refreshData();
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+// Close modal on overlay click
+document.getElementById('edit-modal').addEventListener('click', function(e) {
+  if (e.target === this) closeEditModal();
+});
+
+// ==================== Data ====================
+
+async function refreshData() {
+  try {
+    const r = await fetch(API + '/api/keys');
+    const data = await r.json();
+    renderStats(data);
+    renderKeys(data.keys, data.daily_limit);
+  } catch(e) {
+    console.error('刷新失败:', e);
+    document.getElementById('refresh-indicator').textContent = '⚠️ 连接失败';
+  }
+}
+
+function renderStats(data) {
+  document.getElementById('stat-total').textContent = data.total_keys;
+  document.getElementById('stat-available').textContent = data.available_keys;
+  document.getElementById('stat-limit').textContent = data.daily_limit;
+  document.getElementById('stat-capacity').textContent = (data.total_keys * data.daily_limit).toLocaleString();
+
+  const badge = document.getElementById('health-badge');
+  if (data.available_keys > 0) {
+    badge.innerHTML = '<span class="dot green"></span> 运行中';
+  } else if (data.total_keys > 0) {
+    badge.innerHTML = '<span class="dot red"></span> 全部耗尽';
+  } else {
+    badge.innerHTML = '<span class="dot orange"></span> 无 Key';
+  }
+}
+
+function renderKeys(keys, limit) {
+  const tbody = document.getElementById('keys-tbody');
+  if (!keys || keys.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="6"><div class="empty"><div class="icon">📭</div><p>还没有添加任何 Key</p></div></td></tr>';
+    return;
+  }
+  tbody.innerHTML = keys.map(k => {
+    let statusHtml;
+    if (k.is_exhausted) {
+      statusHtml = '<span class="status-tag exhausted">🚫 日配额用完</span>';
+    } else if (k.is_cooling) {
+      statusHtml = `<span class="status-tag warn">⏳ 冷却 ${Math.ceil(k.cooldown_remaining_s)}s</span>`;
+    } else {
+      statusHtml = '<span class="status-tag ok">✅ 正常</span>';
+    }
+    const cls = progressClass(k.daily_count, limit);
+    return `<tr>
+      <td class="key-cell">${esc(k.masked)}</td>
+      <td>
+        ${k.daily_count} / ${limit}
+        <div class="progress-bar"><div class="progress-fill ${cls}" style="width:${pct(k.daily_count, limit)}%"></div></div>
+      </td>
+      <td>${statusHtml}</td>
+      <td>${k.total_requests.toLocaleString()}</td>
+      <td>${k.total_429}</td>
+      <td class="actions">
+        <button class="btn btn-outline btn-xs" onclick="openEditModal('${esc(k.masked)}','${esc(k.key)}')">✏️</button>
+        <button class="btn btn-danger btn-xs" onclick="deleteKey('${esc(k.key)}')">🗑</button>
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+function esc(s) { return s.replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/"/g,'&quot;'); }
+
+// ==================== CRUD ====================
+
+async function addKey() {
+  const input = document.getElementById('add-key-input');
+  const key = input.value.trim();
+  if (!key) { toast('请输入 Key', 'error'); return; }
+  try {
+    const r = await fetch(API + '/api/keys', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({key})
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.detail || '添加失败');
+    toast('Key 添加成功！');
+    input.value = '';
+    refreshData();
+    // switch to keys tab
+    document.querySelector('[data-tab="keys"]').click();
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+async function deleteKey(fullKey) {
+  if (!confirm('确定要删除这把 Key 吗？')) return;
+  try {
+    const r = await fetch(API + '/api/keys/' + encodeURIComponent(fullKey), { method: 'DELETE' });
+    if (!r.ok) { const d = await r.json(); throw new Error(d.detail || '删除失败'); }
+    toast('Key 已删除');
+    refreshData();
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+// ==================== Test ====================
+
+async function testKey() {
+  const key = document.getElementById('test-key-input').value.trim();
+  const model = document.getElementById('test-model-input').value.trim();
+  const msg = document.getElementById('test-msg-input').value.trim();
+  if (!key) { toast('请输入 Key', 'error'); return; }
+
+  const btn = document.getElementById('test-btn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> 测试中...';
+
+  const resultDiv = document.getElementById('test-result');
+  resultDiv.innerHTML = '';
+
+  try {
+    const r = await fetch(API + '/api/keys/test', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({key, model, message: msg})
+    });
+    const data = await r.json();
+    if (data.ok) {
+      resultDiv.innerHTML = `
+        <div class="test-result success">
+          <strong>✅ 测试成功</strong>
+          <p style="margin-top:8px;color:var(--muted);">延迟: ${data.latency_ms}ms | 模型: ${data.model}</p>
+          <p style="margin-top:4px;color:var(--muted);">Tokens: prompt=${data.usage?.prompt_tokens ?? '-'} completion=${data.usage?.completion_tokens ?? '-'}</p>
+          <div class="reply">${escHtml(data.reply)}</div>
+        </div>`;
+    } else {
+      resultDiv.innerHTML = `
+        <div class="test-result fail">
+          <strong>❌ 测试失败</strong>
+          <p style="margin-top:8px;color:var(--muted);">状态码: ${data.status} | 延迟: ${data.latency_ms}ms</p>
+          <div class="reply">${escHtml(data.error)}</div>
+        </div>`;
+    }
+  } catch(e) {
+    resultDiv.innerHTML = `<div class="test-result fail"><strong>❌ 网络错误</strong><div class="reply">${escHtml(e.message)}</div></div>`;
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '🧪 开始测试';
+  }
+}
+
+function escHtml(s) {
+  if (!s) return '';
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ==================== Auto Refresh ====================
+
+let refreshTimer;
+function startAutoRefresh() {
+  refreshData();
+  refreshTimer = setInterval(refreshData, 5000);
+}
+startAutoRefresh();
+
+// ==================== Keyboard: Enter to submit ====================
+
+document.getElementById('add-key-input').addEventListener('keydown', e => { if (e.key==='Enter') addKey(); });
+document.getElementById('test-key-input').addEventListener('keydown', e => { if (e.key==='Enter') testKey(); });
+</script>
+</body>
+</html>
