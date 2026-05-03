@@ -2,7 +2,7 @@
  * POST /api/chat — OpenAI 兼容代理，自动 Key 轮换
  * 支持 stream (SSE) 和非 stream 模式。
  */
-import { pickAndUse, mark429, getData, getKeyStats, getPoolStats, syncKeyFromHeaders } from './lib/key-store.js';
+import { pickAndUse, mark429, getData, getKeyStats, getPoolStats } from './lib/key-store.js';
 
 const MAX_RETRIES = 15;
 
@@ -113,8 +113,6 @@ export default async function handler(req, res) {
       // 非 Stream 模式
       if (upstreamResp.ok) {
         const data = await upstreamResp.json();
-        // 静默同步真实用量到数据库（fire-and-forget）
-        syncKeyFromHeaders(key, upstreamResp.headers).catch(() => {});
         res.status(200).json(data);
         return;
       }
