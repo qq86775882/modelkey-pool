@@ -4,8 +4,6 @@
 const NEON_SQL = process.env.NEON_SQL_ENDPOINT || 'https://ep-young-sound-ahwn29w0.c-3.us-east-1.aws.neon.tech/sql';
 const NEON_URL = process.env.NEON_DATABASE_URL || 'postgresql://neondb_owner:npg_0mdBGEUf2DcV@ep-young-sound-ahwn29w0.c-3.us-east-1.aws.neon.tech/neondb?sslmode=require';
 
-let lastDate = null;
-
 function today() {
   return new Date().toISOString().slice(0, 10);
 }
@@ -42,11 +40,46 @@ async function neonQuery(query, params = []) {
   return resp.json();
 }
 
+// 建表
+async function ensureTables() {
+  await neonQuery(`
+    CREATE TABLE IF NOT EXISTS key_store (
+      api_key TEXT PRIMARY KEY,
+      daily_count INT DEFAULT 0,
+      total_requests INT DEFAULT 0,
+      total_429 INT DEFAULT 0,
+      cooldown_until BIGINT DEFAULT 0,
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+  await neonQuery(`
+    CREATE TABLE IF NOT EXISTS meta_state (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    )
+  `);
+}
+
+// 午夜重置 — 仅在日期真正跨天时执行
 async function midnightReset() {
+  await ensureTables();
   const now = today();
-  if (lastDate !== now) {
-    lastDate = now;
+  const r = await neonQuery("SELECT value FROM meta_state WHERE key = 'reset_date'");
+  const stored = r.rows.length > 0 ? r.rows[0].value : null;
+  if (stored !== now) {
     await neonQuery('UPDATE key_store SET daily_count = 0, cooldown_until = 0');
+    await neonQuery(
+      "INSERT INTO meta_state (key, value) VALUES ('reset_date', $1) ON CONFLICT (key) DO UPDATE SET value = $1",
+      [now]
+    );
+  }
+  // Seed if empty
+  const count = await neonQuery('SELECT COUNT(*) as n FROM key_store');
+  if (parseInt(count.rows[0].n) === 0) {
+    const envKeys = (process.env.MODELSCOPE_KEYS || '').split(',').map(k => k.trim()).filter(k => k.startsWith('ms-'));
+    for (const k of envKeys) {
+      await neonQuery('INSERT INTO key_store (api_key) VALUES ($1) ON CONFLICT DO NOTHING', [k]);
+    }
   }
 }
 
