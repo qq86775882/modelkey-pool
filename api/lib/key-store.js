@@ -37,13 +37,24 @@ async function getData() {
   }
 
   // Fallback: memory or init from env
+// 兜底 Key 列表：环境变量为空时使用
+const FALLBACK_KEYS = [
+  'ms-9888e4a5-5b07-47d9-839e-e39cd2f12121',
+  'ms-4f9a791e-c673-4872-8193-85af83eb236d',
+  'ms-ed151332-dfb5-4cda-a6be-80d090e5590f',
+  'ms-e6becd98-b08d-494a-9df4-9b4ba87917c3',
+  'ms-b674b42f-0fe4-4804-9b06-d30756a07c35',
+  'ms-8cd46fa0-b9e7-4869-abce-6d69b9df1964',
+];
+
   const now = today();
   if (memoryResetDate !== now) {
     memoryStore.clear();
     memoryResetDate = now;
-    // Load initial keys from env
+    // Load keys from env, fallback to hardcoded list
     const envKeys = (process.env.MODELSCOPE_KEYS || '').split(',').map(k => k.trim()).filter(Boolean);
-    for (const k of envKeys) {
+    const initialKeys = envKeys.length > 0 ? envKeys : FALLBACK_KEYS;
+    for (const k of initialKeys) {
       memoryStore.set(k, { key: k, totalRequests: 0, total429: 0, dailyCount: 0, cooldownUntil: 0 });
     }
   }
