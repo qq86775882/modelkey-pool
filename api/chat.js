@@ -1,54 +1,84 @@
-import { pickAndUse, mark429, getKeyStats, getPoolStats } from './lib/key-store.js';
+import { pickAndUse, mark429, getKeyStats, getPoolStats, syncKeyFromHeaders } from './lib/key-store.js';
+
+const MAX_RETRIES = 15;
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'POST,OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization');
   if (req.method === 'OPTIONS') return res.status(204).end();
   if (req.method !== 'POST') { res.status(405).json({ error: 'Method not allowed' }); return; }
 
-  let body;
-  try { body = req.body; } catch { res.status(400).json({ error: 'Invalid JSON' }); return; }
-
-  const model = body.model || 'deepseek-ai/DeepSeek-V4-Pro';
-  const key = await pickAndUse();
-  if (!key) { res.status(503).json({ error: '所有 Key 今日配额已用尽' }); return; }
-
-  // 用量响应头
-  const [stats, pool] = await Promise.all([getKeyStats(key), getPoolStats()]);
-  if (stats) {
-    res.setHeader('X-Key-Pool-Key', stats.masked);
-    res.setHeader('X-Key-Pool-Usage', `${stats.dailyCount}/${stats.dailyLimit}`);
-    res.setHeader('X-Key-Pool-Remaining', String(stats.remaining));
+  const apiKey = process.env.API_KEY;
+  if (apiKey) {
+    const auth = req.headers.authorization || '';
+    const token = auth.startsWith('Bearer ') ? auth.slice(7) : '';
+    if (token !== apiKey) { res.status(401).json({ error: 'Unauthorized' }); return; }
   }
-  res.setHeader('X-Key-Pool-Total', String(pool.totalKeys));
-  res.setHeader('X-Key-Pool-Available', String(pool.availableKeys));
 
-  try {
-    const upstreamResp = await fetch('https://api-inference.modelscope.cn/v1/chat/completions', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
-      body: JSON.stringify({ ...body, model, stream: false }),
-    });
+  let body; try { body = req.body; } catch { res.status(400).json({ error: 'Invalid JSON' }); return; }
+  const stream = body.stream === true;
+  const model = body.model || process.env.DEFAULT_MODEL || 'deepseek-ai/DeepSeek-V4-Pro';
 
-    if (upstreamResp.status === 429) { await mark429(key); res.status(429).json({ error: 'Key 已限流' }); return; }
+  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+    const key = await pickAndUse();
+    if (!key) { res.status(503).json({ error: '所有 Key 今日配额已用尽', code: 'ALL_KEYS_EXHAUSTED' }); return; }
 
-    if (!upstreamResp.ok) {
+    const [stats, pool] = await Promise.all([getKeyStats(key), getPoolStats()]);
+    if (stats) {
+      res.setHeader('X-Key-Pool-Key', stats.masked);
+      res.setHeader('X-Key-Pool-Usage', `${stats.dailyCount}/${stats.dailyLimit}`);
+      res.setHeader('X-Key-Pool-Remaining', String(stats.remaining));
+    }
+    res.setHeader('X-Key-Pool-Total', String(pool.totalKeys));
+    res.setHeader('X-Key-Pool-Available', String(pool.availableKeys));
+
+    try {
+      const upstreamResp = await fetch('https://api-inference.modelscope.cn/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
+        body: JSON.stringify({ ...body, model, stream }),
+      });
+
+      if (upstreamResp.status === 429) { await mark429(key); continue; }
+      if (upstreamResp.status >= 500) { continue; }
+
+      // 透传 ModelScope 官方限流头
+      ['modelscope-ratelimit-model-requests-limit',
+       'modelscope-ratelimit-model-requests-remaining',
+       'modelscope-ratelimit-requests-limit',
+       'modelscope-ratelimit-requests-remaining'].forEach(h => {
+        try { const v = upstreamResp.headers.get(h); if (v) res.setHeader(h, v); } catch {}
+      });
+
+      // Stream 模式
+      if (stream && upstreamResp.ok) {
+        res.status(200).setHeader('Content-Type', 'text/event-stream');
+        const reader = upstreamResp.body.getReader();
+        const decoder = new TextDecoder();
+        try { while (true) { const { done, value } = await reader.read(); if (done) break; res.write(decoder.decode(value, { stream: true })); } }
+        finally { reader.releaseLock(); res.end(); }
+        // stream 结束后静默同步
+        syncKeyFromHeaders(key, upstreamResp.headers).catch(() => {});
+        return;
+      }
+
+      // 非 Stream 模式
+      if (upstreamResp.ok) {
+        const data = await upstreamResp.json();
+        // 静默同步真实用量到数据库
+        syncKeyFromHeaders(key, upstreamResp.headers).catch(() => {});
+        res.status(200).json(data);
+        return;
+      }
+
       const errText = await upstreamResp.text().catch(() => '');
-      res.status(upstreamResp.status).json({ error: errText.slice(0, 200), status: upstreamResp.status });
+      res.status(upstreamResp.status).json({ error: errText.slice(0, 500), code: 'UPSTREAM_ERROR', status: upstreamResp.status });
+      return;
+    } catch (e) {
+      if (attempt < MAX_RETRIES - 1) { await mark429(key, 60000); continue; }
+      res.status(502).json({ error: `请求失败: ${e.message}`, code: 'NETWORK_ERROR' });
       return;
     }
-
-    // 透传 ModelScope 限流头
-    ['modelscope-ratelimit-model-requests-limit',
-     'modelscope-ratelimit-model-requests-remaining',
-     'modelscope-ratelimit-requests-limit',
-     'modelscope-ratelimit-requests-remaining'].forEach(h => {
-      const v = upstreamResp.headers.get(h);
-      if (v) res.setHeader(h, v);
-    });
-
-    const data = await upstreamResp.json();
-    res.status(200).json(data);
-  } catch (e) {
-    res.status(502).json({ error: e.message });
   }
 }
