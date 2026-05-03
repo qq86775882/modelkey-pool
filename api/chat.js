@@ -72,19 +72,21 @@ export default async function handler(req, res) {
         continue;
       }
 
-      // 透传 ModelScope 官方限流头
-      ['modelscope-ratelimit-model-requests-limit',
-       'modelscope-ratelimit-model-requests-remaining',
-       'modelscope-ratelimit-requests-limit',
-       'modelscope-ratelimit-requests-remaining'].forEach(h => {
-        const v = upstreamResp.headers.get(h);
-        if (v) res.setHeader(h, v);
-      });
-
       // 5xx → 短暂冷却，重试
       if (upstreamResp.status >= 500) {
         continue;
       }
+
+      // 透传 ModelScope 官方限流头（仅成功时透传）
+      ['modelscope-ratelimit-model-requests-limit',
+       'modelscope-ratelimit-model-requests-remaining',
+       'modelscope-ratelimit-requests-limit',
+       'modelscope-ratelimit-requests-remaining'].forEach(h => {
+        try {
+          const v = upstreamResp.headers.get(h);
+          if (v) res.setHeader(h, v);
+        } catch {}
+      });
 
       // Stream 模式
       if (stream && upstreamResp.ok) {
