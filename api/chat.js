@@ -12,7 +12,7 @@ export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization');
 
   if (req.method === 'OPTIONS') return res.status(204).end();
-  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+  if (req.method !== 'POST') { res.status(405).json({ error: 'Method not allowed' }); return; }
 
   // 外部 API Key 鉴权（可选：未设 API_KEY 环境变量时跳过鉴权）
   const apiKey = process.env.API_KEY;
@@ -20,7 +20,8 @@ export default async function handler(req, res) {
     const auth = req.headers.authorization || '';
     const token = auth.startsWith('Bearer ') ? auth.slice(7) : '';
     if (token !== apiKey) {
-      return res.status(401).json({ error: 'Unauthorized: API Key 不正确', code: 'UNAUTHORIZED' });
+      res.status(401).json({ error: 'Unauthorized: API Key 不正确', code: 'UNAUTHORIZED' });
+      return;
     }
   }
 
@@ -28,7 +29,8 @@ export default async function handler(req, res) {
   try {
     body = req.body;
   } catch {
-    return res.status(400).json({ error: 'Invalid JSON' });
+    res.status(400).json({ error: 'Invalid JSON' });
+    return;
   }
 
   const stream = body.stream === true;
@@ -37,10 +39,11 @@ export default async function handler(req, res) {
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
     const key = await pickAndUse();
     if (!key) {
-      return res.status(503).json({
+      res.status(503).json({
         error: '所有 Key 今日配额已用尽，请等待午夜重置',
         code: 'ALL_KEYS_EXHAUSTED',
       });
+      return;
     }
 
     try {
@@ -91,23 +94,25 @@ export default async function handler(req, res) {
       // 非 Stream 模式
       if (upstreamResp.ok) {
         const data = await upstreamResp.json();
-        return res.json(data);
+        res.status(200).json(data);
+        return;
       }
 
       // 其他错误
       const errText = await upstreamResp.text().catch(() => '');
-      return res.status(upstreamResp.status).json({
+      res.status(upstreamResp.status).json({
         error: errText.slice(0, 500),
         code: 'UPSTREAM_ERROR',
         status: upstreamResp.status,
       });
+      return;
     } catch (e) {
       // 网络错误 → 重试
       if (attempt >= MAX_RETRIES - 1) {
-        return res.status(502).json({ error: `请求失败: ${e.message}`, code: 'NETWORK_ERROR' });
+        res.status(502).json({ error: `请求失败: ${e.message}`, code: 'NETWORK_ERROR' });
       }
     }
   }
 
-  return res.status(502).json({ error: '所有重试均失败', code: 'ALL_RETRIES_FAILED' });
+  res.status(502).json({ error: '所有重试均失败', code: 'ALL_RETRIES_FAILED' });
 }
