@@ -21,10 +21,10 @@ export default async function handler(req, res) {
   const model = body.model || process.env.DEFAULT_MODEL || 'deepseek-ai/DeepSeek-V4-Pro';
 
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-    const key = await pickAndUse();
+    const key = await pickAndUse(model);
     if (!key) { res.status(503).json({ error: '所有 Key 今日配额已用尽', code: 'ALL_KEYS_EXHAUSTED' }); return; }
 
-    const [stats, pool] = await Promise.all([getKeyStats(key), getPoolStats()]);
+    const [stats, pool] = await Promise.all([getKeyStats(key, model), getPoolStats(model)]);
     if (stats) {
       res.setHeader('X-Key-Pool-Key', stats.masked);
       res.setHeader('X-Key-Pool-Usage', `${stats.dailyCount}/${stats.dailyLimit}`);
@@ -43,7 +43,7 @@ export default async function handler(req, res) {
       if (upstreamResp.status === 429) { await mark429(key); continue; }
       if (upstreamResp.status >= 500) { continue; }
 
-      // 透传 ModelScope 官方限流头
+      // 透传 ModelScope 限流头
       ['modelscope-ratelimit-model-requests-limit',
        'modelscope-ratelimit-model-requests-remaining',
        'modelscope-ratelimit-requests-limit',
@@ -51,23 +51,21 @@ export default async function handler(req, res) {
         try { const v = upstreamResp.headers.get(h); if (v) res.setHeader(h, v); } catch {}
       });
 
-      // Stream 模式
+      // Stream
       if (stream && upstreamResp.ok) {
         res.status(200).setHeader('Content-Type', 'text/event-stream');
         const reader = upstreamResp.body.getReader();
         const decoder = new TextDecoder();
         try { while (true) { const { done, value } = await reader.read(); if (done) break; res.write(decoder.decode(value, { stream: true })); } }
         finally { reader.releaseLock(); res.end(); }
-        // stream 结束后静默同步
-        syncKeyFromHeaders(key, upstreamResp.headers).catch(() => {});
+        syncKeyFromHeaders(key, model, upstreamResp.headers).catch(() => {});
         return;
       }
 
-      // 非 Stream 模式
+      // 非 Stream
       if (upstreamResp.ok) {
         const data = await upstreamResp.json();
-        // 静默同步真实用量到数据库
-        syncKeyFromHeaders(key, upstreamResp.headers).catch(() => {});
+        syncKeyFromHeaders(key, model, upstreamResp.headers).catch(() => {});
         res.status(200).json(data);
         return;
       }
