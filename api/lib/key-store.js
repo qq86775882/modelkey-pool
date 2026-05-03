@@ -221,16 +221,4 @@ export async function getPoolStats() {
   };
 }
 
-export async function syncKeyFromHeaders(key, headers) {
-  const limit = parseInt(headers.get('modelscope-ratelimit-model-requests-limit')) || null;
-  const remaining = parseInt(headers.get('modelscope-ratelimit-model-requests-remaining'));
-  if (limit && !isNaN(remaining)) {
-    const used = limit - remaining;
-    await neonQuery(
-      'UPDATE key_store SET daily_count = $1 WHERE api_key = $2',
-      [Math.max(0, used), key]
-    );
-    return { limit, remaining, used };
-  }
-  return null;
-}
+export { getData, getDefaultModel };
