@@ -40,8 +40,12 @@ export default async function handler(req, res) {
         body: JSON.stringify({ ...body, model, stream }),
       });
 
-      if (upstreamResp.status === 429) { await mark429(key); continue; }
-      if (upstreamResp.status >= 500) { continue; }
+      if (upstreamResp.status === 429) {
+        // Key 已耗尽 — 从响应头同步 remaining=0，自然标记耗尽
+        syncKeyFromHeaders(key, model, upstreamResp.headers).catch(() => {});
+        continue;
+      }
+      if (upstreamResp.status >= 500) { await mark429(key, 10000); continue; }
 
       // 透传 ModelScope 限流头
       ['modelscope-ratelimit-model-requests-limit',
@@ -74,7 +78,7 @@ export default async function handler(req, res) {
       res.status(upstreamResp.status).json({ error: errText.slice(0, 500), code: 'UPSTREAM_ERROR', status: upstreamResp.status });
       return;
     } catch (e) {
-      if (attempt < MAX_RETRIES - 1) { await mark429(key, 60000); continue; }
+      if (attempt < MAX_RETRIES - 1) { await mark429(key, 10000); continue; }
       res.status(502).json({ error: `请求失败: ${e.message}`, code: 'NETWORK_ERROR' });
       return;
     }
