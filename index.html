@@ -85,17 +85,22 @@ td{border-bottom:1px solid rgba(30,42,66,.5)}tr:hover td{background:rgba(99,102,
 <div class="toast-container" id="toasts"></div>
 <div class="container">
   <div class="header">
-    <div><h1>🔑 ModelKey Pool</h1><span class="subtitle">ModelScope DeepSeek-V4-Pro 多 Key 轮换代理</span></div>
+    <div><h1>🔑 ModelKey Pool</h1><span class="subtitle">ModelScope 多模型 Key 轮换代理</span></div>
     <div style="display:flex;align-items:center;gap:10px">
-      <span style="font-size:.75rem;color:var(--muted)">🔄 自动刷新</span>
+      <select id="model-select" style="background:var(--card);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:6px;font-size:.85rem" onchange="onModelChange()">
+        <option value="deepseek-ai/DeepSeek-V4-Pro">DeepSeek-V4-Pro</option>
+        <option value="ZhipuAI/GLM-5">GLM-5</option>
+      </select>
+      <span style="font-size:.75rem;color:var(--muted)">🔃 自动</span>
       <span class="badge" id="health-badge"><span class="dot green"></span> 运行中</span>
     </div>
   </div>
   <div class="stats">
     <div class="stat-card"><div class="label">Key 总数</div><div class="value blue" id="s-total">-</div></div>
     <div class="stat-card"><div class="label">可用 Key</div><div class="value green" id="s-avail">-</div></div>
+    <div class="stat-card"><div class="label">已用总量</div><div class="value orange" id="s-used">-</div></div>
+    <div class="stat-card"><div class="label">剩余总量</div><div class="value green" id="s-remain">-</div></div>
     <div class="stat-card"><div class="label">日限额 / 把</div><div class="value" id="s-limit">-</div></div>
-    <div class="stat-card"><div class="label">理论日总量</div><div class="value orange" id="s-cap">-</div></div>
   </div>
   <div class="tabs">
     <button class="tab active" data-tab="keys">🔑 Key 列表</button>
@@ -134,7 +139,7 @@ td{border-bottom:1px solid rgba(30,42,66,.5)}tr:hover td{background:rgba(99,102,
     <div class="docs">
 
 <h2>🚀 快速接入</h2>
-<p>将你日常使用的 AI 工具的 <strong>Base URL</strong> 设置为 <code>https://你的域名/v1</code>，API Key 随便填即可。</p>
+<p>将你日常使用的 AI 工具的 <strong>Base URL</strong> 设置为 <code>https://modelkey.cc.cd/v1</code>，API Key 随便填即可。<br>📌 <strong>支持模型：</strong><code>deepseek-ai/DeepSeek-V4-Pro</code>、<code>ZhipuAI/GLM-5</code> — 只需改模型名即可无感切换</p>
 
 <h3>Cherry Studio / ChatBox / NextChat</h3>
 <pre><code>API 地址:  https://你的域名/v1
@@ -330,18 +335,26 @@ document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{
 // ========= Data =========
 async function refresh(){
   try{
-    const d=await api('/api/keys');
+    const model = document.getElementById('model-select').value;
+    const d=await api('/api/keys?model='+encodeURIComponent(model));
+    const keyList = d.keys || [];
+    const totalRemaining = keyList.reduce((s,k) => s + (k.remaining || 0), 0);
+    const totalUsed = keyList.reduce((s,k) => s + (k.dailyCount || 0), 0);
     document.getElementById('s-total').textContent=d.totalKeys;
     document.getElementById('s-avail').textContent=d.availableKeys;
+    document.getElementById('s-used').textContent=totalUsed.toLocaleString();
+    document.getElementById('s-remain').textContent=totalRemaining.toLocaleString();
     document.getElementById('s-limit').textContent=d.dailyLimit;
-    document.getElementById('s-cap').textContent=(d.totalKeys*d.dailyLimit).toLocaleString();
     const b=document.getElementById('health-badge');
     if(d.totalKeys===0) b.innerHTML='<span class="dot orange"></span> 无 Key';
     else if(d.availableKeys>0) b.innerHTML='<span class="dot green"></span> 运行中';
     else b.innerHTML='<span class="dot red"></span> 全部耗尽';
-    renderKeys(d.keys,d.dailyLimit);
+    renderKeys(keyList,d.dailyLimit);
+    // 恢复模型选择器
+    document.getElementById('model-select').value = d.model || model;
   }catch(e){console.error(e)}
 }
+function onModelChange(){ refresh(); }
 function pc(u,l){const p=u/l;return p>=1?'danger':p>=0.8?'warn':'safe'}
 function renderKeys(keys,lim){
   const tb=document.getElementById('keys-tbody');
