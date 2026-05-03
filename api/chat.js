@@ -2,7 +2,7 @@
  * POST /api/chat — OpenAI 兼容代理，自动 Key 轮换
  * 支持 stream (SSE) 和非 stream 模式。
  */
-import { pickAndUse, mark429, getData } from './lib/key-store.js';
+import { pickAndUse, mark429, getData, getKeyStats, getPoolStats } from './lib/key-store.js';
 
 const MAX_RETRIES = 15;
 
@@ -45,6 +45,16 @@ export default async function handler(req, res) {
       });
       return;
     }
+
+    // 设置用量响应头
+    const [stats, pool] = await Promise.all([getKeyStats(key), getPoolStats()]);
+    if (stats) {
+      res.setHeader('X-Key-Pool-Key', stats.masked);
+      res.setHeader('X-Key-Pool-Usage', `${stats.dailyCount}/${stats.dailyLimit}`);
+      res.setHeader('X-Key-Pool-Remaining', String(stats.remaining));
+    }
+    res.setHeader('X-Key-Pool-Total', String(pool.totalKeys));
+    res.setHeader('X-Key-Pool-Available', String(pool.availableKeys));
 
     try {
       const upstreamResp = await fetch('https://api-inference.modelscope.cn/v1/chat/completions', {

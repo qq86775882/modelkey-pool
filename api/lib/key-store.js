@@ -196,4 +196,29 @@ export async function pickAndUse() {
   return selected.key;
 }
 
+export async function getKeyStats(key) {
+  const r = await neonQuery('SELECT * FROM key_store WHERE api_key = $1', [key]);
+  if (r.rows.length === 0) return null;
+  const k = r.rows[0];
+  const limit = getDailyLimit();
+  return {
+    key: k.api_key,
+    masked: mask(k.api_key),
+    dailyCount: k.daily_count,
+    dailyLimit: limit,
+    remaining: limit - k.daily_count,
+    cooldownUntil: k.cooldown_until,
+  };
+}
+
+export async function getPoolStats() {
+  const data = await getData();
+  const now = Date.now();
+  return {
+    totalKeys: data.keys.length,
+    availableKeys: data.keys.filter(k => k.dailyCount < data.dailyLimit && k.cooldownUntil <= now).length,
+    dailyLimit: data.dailyLimit,
+  };
+}
+
 export { getData, getDefaultModel };
