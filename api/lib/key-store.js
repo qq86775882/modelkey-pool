@@ -17,7 +17,7 @@ function getDefaultModel() {
 }
 
 function getDailyLimit() {
-  return parseInt(process.env.DAILY_LIMIT || '200');
+  return parseInt(process.env.DAILY_LIMIT || '500');
 }
 
 function getConfig() {
