@@ -235,7 +235,7 @@ curl https://你的域名/v1/chat/completions \
 <p>每次请求到来时，代理按以下逻辑选 Key：</p>
 <ul>
   <li>🥇 <strong>跳过冷却中</strong> — 刚被 429 限流的 Key 会冷却 5 分钟</li>
-  <li>🥈 <strong>跳过日配额耗尽</strong> — 当天已调用 ≥200 次的 Key 不再使用</li>
+  <li>🥈 <strong>跳过日配额耗尽</strong> — 当天已调用 ≥500 次的 Key 不再使用</li>
   <li>🥉 <strong>负载均衡</strong> — 在剩余 Key 中选「剩余可用次数最多」的那把</li>
 </ul>
 
@@ -279,7 +279,7 @@ curl https://你的域名/v1/chat/completions \
 <h2>❓ 常见问题</h2>
 
 <h3>Q: 日配额是多少？</h3>
-<p>ModelScope 每个 Key 每天 200 次调用。如果你有 5 个 Key，理论日总量是 1000 次。</p>
+<p>ModelScope 每个 Key 每天 <strong>500 次</strong>调用（每个模型）。如果你有 6 个 Key，理论日总量是 3000 次。</p>
 
 <h3>Q: 配额什么时候重置？</h3>
 <p>每天午夜 00:00 自动重置。取决于 ModelScope 的时区（通常是 UTC+8）。</p>
