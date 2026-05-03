@@ -221,4 +221,18 @@ export async function getPoolStats() {
   };
 }
 
-export { getData, getDefaultModel };
+export async function syncKeyFromHeaders(key, headers) {
+  try {
+    const limit = parseInt(headers.get('modelscope-ratelimit-model-requests-limit')) || null;
+    const remaining = parseInt(headers.get('modelscope-ratelimit-model-requests-remaining'));
+    if (limit && !isNaN(remaining)) {
+      const used = limit - remaining;
+      await neonQuery(
+        'UPDATE key_store SET daily_count = $1 WHERE api_key = $2',
+        [Math.max(0, used), key]
+      );
+      return { limit, remaining, used };
+    }
+  } catch {} // 静默失败，绝不崩
+  return null;
+}
