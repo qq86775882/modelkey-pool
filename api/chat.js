@@ -26,7 +26,6 @@ export default async function handler(req, res) {
 
     const { key, stats, pool } = result;
 
-    // stats 和 pool 已由 pickAndUse 一次返回，不再单独调 getKeyStats/getPoolStats
     res.setHeader('X-Key-Pool-Key', stats.masked);
     res.setHeader('X-Key-Pool-Usage', `${stats.dailyCount}/${stats.dailyLimit}`);
     res.setHeader('X-Key-Pool-Remaining', String(stats.remaining));
@@ -37,8 +36,11 @@ export default async function handler(req, res) {
       const upstreamResp = await fetch('https://api-inference.modelscope.cn/v1/chat/completions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
-        body: JSON.stringify({ ...body, model, stream }),
+        body: JSON.stringify({ ...body, model, stream: false }),  // 先强制非流式测试
       });
+
+      const rawText = await upstreamResp.text();
+      console.log('[DEBUG] status=' + upstreamResp.status + ' body=' + rawText.slice(0, 300));
 
       if (upstreamResp.status === 429) {
         syncKeyFromHeaders(key, model, upstreamResp.headers).catch(() => {});
@@ -46,7 +48,7 @@ export default async function handler(req, res) {
       }
       if (upstreamResp.status >= 500) { await mark429(key, 10000); continue; }
 
-      // 透传 ModelScope 限流头
+      // 透传限流头
       ['modelscope-ratelimit-model-requests-limit',
        'modelscope-ratelimit-model-requests-remaining',
        'modelscope-ratelimit-requests-limit',
@@ -54,25 +56,21 @@ export default async function handler(req, res) {
         try { const v = upstreamResp.headers.get(h); if (v) res.setHeader(h, v); } catch {}
       });
 
-      // Stream
-      if (stream && upstreamResp.ok) {
-        res.status(200).setHeader('Content-Type', 'text/event-stream');
-        const reader = upstreamResp.body.getReader();
-        const decoder = new TextDecoder();
-        try { while (true) { const { done, value } = await reader.read(); if (done) break; res.write(decoder.decode(value, { stream: true })); } } catch {}
-        res.end();
-        return;
-      }
-
-      // 非 stream → 同步真实用量
+      // 同步用量
       if (upstreamResp.ok) {
         syncKeyFromHeaders(key, model, upstreamResp.headers).catch(() => {});
       }
 
-      const data = await upstreamResp.json();
-      res.status(upstreamResp.status).json(data);
+      try {
+        const data = JSON.parse(rawText);
+        res.setHeader('Content-Type', 'application/json; charset=utf-8');
+        res.status(upstreamResp.status).end(rawText);
+      } catch {
+        res.status(502).json({ error: 'Invalid JSON from upstream', raw: rawText.slice(0, 200) });
+      }
       return;
     } catch (e) {
+      console.error('[ERROR]', e.message);
       await mark429(key, Math.min((attempt + 1) * 5000, 30000));
     }
   }
