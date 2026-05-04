@@ -1,6 +1,6 @@
 /**
  * Key Store — Neon PostgreSQL (Serverless SQL API)
- * v3: 性能优化 — 请求内缓存 + 合并查询，DB 调用从 ~18 次降至 ~4 次
+ * v3: 性能优化 — 模块级缓存降低重复调用，DB 调用从 ~18 次降至 ~5 次
  */
 const NEON_SQL = process.env.NEON_SQL_ENDPOINT || 'https://ep-young-sound-ahwn29w0.c-3.us-east-1.aws.neon.tech/sql';
 const NEON_URL = process.env.NEON_DATABASE_URL || 'postgresql://neondb_owner:npg_0mdBGEUf2DcV@ep-young-sound-ahwn29w0.c-3.us-east-1.aws.neon.tech/neondb?sslmode=require';
@@ -29,17 +29,15 @@ async function neonQuery(query, params = []) {
   return resp.json();
 }
 
-// 3 合 1：三条 CREATE TABLE 合并为一次 HTTP 调用
+// Neon SQL API 不支持多语句，但 5s 缓存让 3 次调用的 overhead 可忽略
 async function ensureTables() {
-  await neonQuery(`
-    CREATE TABLE IF NOT EXISTS key_store (
-      api_key TEXT PRIMARY KEY, total_requests INT DEFAULT 0, total_429 INT DEFAULT 0,
-      cooldown_until BIGINT DEFAULT 0, updated_at TIMESTAMPTZ DEFAULT NOW());
-    CREATE TABLE IF NOT EXISTS key_model_usage (
-      api_key TEXT NOT NULL, model TEXT NOT NULL, daily_count INT DEFAULT 0,
-      PRIMARY KEY (api_key, model));
-    CREATE TABLE IF NOT EXISTS meta_state (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-  `);
+  await neonQuery(`CREATE TABLE IF NOT EXISTS key_store (
+    api_key TEXT PRIMARY KEY, total_requests INT DEFAULT 0, total_429 INT DEFAULT 0,
+    cooldown_until BIGINT DEFAULT 0, updated_at TIMESTAMPTZ DEFAULT NOW())`);
+  await neonQuery(`CREATE TABLE IF NOT EXISTS key_model_usage (
+    api_key TEXT NOT NULL, model TEXT NOT NULL, daily_count INT DEFAULT 0,
+    PRIMARY KEY (api_key, model))`);
+  await neonQuery(`CREATE TABLE IF NOT EXISTS meta_state (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
 }
 
 async function midnightReset() {
