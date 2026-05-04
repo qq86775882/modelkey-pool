@@ -1,6 +1,6 @@
 /**
  * Key Store — Neon PostgreSQL (Serverless SQL API)
- * v2: per-model 用量追踪 (Key × Model)
+ * v3: 性能优化 — 请求内缓存 + 合并查询，DB 调用从 ~18 次降至 ~4 次
  */
 const NEON_SQL = process.env.NEON_SQL_ENDPOINT || 'https://ep-young-sound-ahwn29w0.c-3.us-east-1.aws.neon.tech/sql';
 const NEON_URL = process.env.NEON_DATABASE_URL || 'postgresql://neondb_owner:npg_0mdBGEUf2DcV@ep-young-sound-ahwn29w0.c-3.us-east-1.aws.neon.tech/neondb?sslmode=require';
@@ -13,6 +13,12 @@ function getConfig() { return { dailyLimit: getDailyLimit(), defaultModel: getDe
 
 const KNOWN_MODELS = ['deepseek-ai/DeepSeek-V4-Pro', 'ZhipuAI/GLM-5'];
 
+// ===== 模块级缓存：降低 DB 重复调用 =====
+let _dataCache = null;      // { data, model, ts }
+let _resetCache = null;     // { ts }
+const DATA_TTL = 3000;      // getData 缓存 3s
+const RESET_TTL = 5000;     // midnightReset 缓存 5s
+
 async function neonQuery(query, params = []) {
   const resp = await fetch(NEON_SQL, {
     method: 'POST',
@@ -23,17 +29,24 @@ async function neonQuery(query, params = []) {
   return resp.json();
 }
 
+// 3 合 1：三条 CREATE TABLE 合并为一次 HTTP 调用
 async function ensureTables() {
-  await neonQuery(`CREATE TABLE IF NOT EXISTS key_store (
-    api_key TEXT PRIMARY KEY, total_requests INT DEFAULT 0, total_429 INT DEFAULT 0,
-    cooldown_until BIGINT DEFAULT 0, updated_at TIMESTAMPTZ DEFAULT NOW())`);
-  await neonQuery(`CREATE TABLE IF NOT EXISTS key_model_usage (
-    api_key TEXT NOT NULL, model TEXT NOT NULL, daily_count INT DEFAULT 0,
-    PRIMARY KEY (api_key, model))`);
-  await neonQuery(`CREATE TABLE IF NOT EXISTS meta_state (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
+  await neonQuery(`
+    CREATE TABLE IF NOT EXISTS key_store (
+      api_key TEXT PRIMARY KEY, total_requests INT DEFAULT 0, total_429 INT DEFAULT 0,
+      cooldown_until BIGINT DEFAULT 0, updated_at TIMESTAMPTZ DEFAULT NOW());
+    CREATE TABLE IF NOT EXISTS key_model_usage (
+      api_key TEXT NOT NULL, model TEXT NOT NULL, daily_count INT DEFAULT 0,
+      PRIMARY KEY (api_key, model));
+    CREATE TABLE IF NOT EXISTS meta_state (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+  `);
 }
 
 async function midnightReset() {
+  // 5 秒内跳过重复检查
+  const ts = Date.now();
+  if (_resetCache && (ts - _resetCache.ts) < RESET_TTL) return;
+
   await ensureTables();
   const now = today();
   const r = await neonQuery("SELECT value FROM meta_state WHERE key = 'reset_date'");
@@ -43,7 +56,6 @@ async function midnightReset() {
     await neonQuery('UPDATE key_store SET cooldown_until = 0');
     await neonQuery("INSERT INTO meta_state (key, value) VALUES ('reset_date', $1) ON CONFLICT (key) DO UPDATE SET value = $1", [now]);
   }
-  // Seed keys
   const cnt = await neonQuery('SELECT COUNT(*) as n FROM key_store');
   if (parseInt(cnt.rows[0].n) === 0) {
     const envKeys = (process.env.MODELSCOPE_KEYS || '').split(',').map(k => k.trim()).filter(k => k.startsWith('ms-'));
@@ -53,20 +65,30 @@ async function midnightReset() {
         await neonQuery('INSERT INTO key_model_usage (api_key, model, daily_count) VALUES ($1, $2, 0) ON CONFLICT DO NOTHING', [k, m]);
     }
   }
+  _resetCache = { ts };
 }
 
 // ========== Core ==========
 
 async function getData(model) {
+  const m = model || getDefaultModel();
+  const ts = Date.now();
+  // 缓存命中
+  if (_dataCache && _dataCache.model === m && (ts - _dataCache.ts) < DATA_TTL) {
+    return _dataCache.data;
+  }
+
   await midnightReset();
   const keys = await neonQuery('SELECT * FROM key_store ORDER BY api_key');
-  const usage = await neonQuery('SELECT * FROM key_model_usage WHERE model = $1', [model || getDefaultModel()]);
+  const usage = await neonQuery('SELECT * FROM key_model_usage WHERE model = $1', [m]);
   const usageMap = {};
   for (const u of usage.rows) usageMap[u.api_key] = u.daily_count;
-  return {
-    model: model || getDefaultModel(),
+
+  const data = {
+    model: m,
     keys: keys.rows.map(r => ({
       key: r.api_key,
+      masked: mask(r.api_key),
       dailyCount: usageMap[r.api_key] || 0,
       totalRequests: r.total_requests,
       total429: r.total_429,
@@ -74,6 +96,9 @@ async function getData(model) {
     })),
     ...getConfig(),
   };
+
+  _dataCache = { data, model: m, ts };
+  return data;
 }
 
 function selectKey(data) {
@@ -86,25 +111,18 @@ function selectKey(data) {
 // ========== Public API ==========
 
 export async function listKeys(model) {
-  await midnightReset();
   const m = model || getDefaultModel();
-  const keys = await neonQuery('SELECT * FROM key_store ORDER BY api_key');
-  const usage = await neonQuery('SELECT * FROM key_model_usage WHERE model = $1', [m]);
-  const usageMap = {};
-  for (const u of usage.rows) usageMap[u.api_key] = u.daily_count;
+  const data = await getData(m);
   const now = Date.now();
-  const limit = getDailyLimit();
+  const limit = data.dailyLimit;
 
-  const keyList = keys.rows.map(r => {
-    const dc = usageMap[r.api_key] || 0;
-    return {
-      key: r.api_key, masked: mask(r.api_key),
-      dailyCount: dc, dailyLimit: limit, remaining: limit - dc,
-      isExhausted: dc >= limit, isCooling: r.cooldown_until > now,
-      cooldownRemainingS: Math.max(0, Math.ceil((r.cooldown_until - now) / 1000)),
-      totalRequests: r.total_requests, total429: r.total_429,
-    };
-  });
+  const keyList = data.keys.map(k => ({
+    key: k.key, masked: k.masked,
+    dailyCount: k.dailyCount, dailyLimit: limit, remaining: limit - k.dailyCount,
+    isExhausted: k.dailyCount >= limit, isCooling: k.cooldownUntil > now,
+    cooldownRemainingS: Math.max(0, Math.ceil((k.cooldownUntil - now) / 1000)),
+    totalRequests: k.totalRequests, total429: k.total429,
+  }));
 
   return {
     model: m, dailyLimit: limit, defaultModel: getDefaultModel(),
@@ -120,29 +138,32 @@ export async function addKey(key) {
     await neonQuery("INSERT INTO key_store (api_key) VALUES ($1) ON CONFLICT (api_key) DO NOTHING", [key]);
     for (const m of KNOWN_MODELS)
       await neonQuery('INSERT INTO key_model_usage (api_key, model, daily_count) VALUES ($1, $2, 0) ON CONFLICT DO NOTHING', [key, m]);
+    _dataCache = null;
     return { ok: true, masked: mask(key) };
   } catch (e) { return { ok: false, error: e.message }; }
 }
 
 export async function removeKey(keyOrMasked) {
-  const keys = await neonQuery('SELECT api_key FROM key_store');
-  const entry = keys.rows.find(k => k.api_key === keyOrMasked || mask(k.api_key) === keyOrMasked);
+  const data = await getData(getDefaultModel());
+  const entry = data.keys.find(k => k.key === keyOrMasked || k.masked === keyOrMasked);
   if (!entry) return { ok: false, error: '未找到 Key' };
-  await neonQuery('DELETE FROM key_model_usage WHERE api_key = $1', [entry.api_key]);
-  await neonQuery('DELETE FROM key_store WHERE api_key = $1', [entry.api_key]);
+  await neonQuery('DELETE FROM key_model_usage WHERE api_key = $1', [entry.key]);
+  await neonQuery('DELETE FROM key_store WHERE api_key = $1', [entry.key]);
+  _dataCache = null;
   return { ok: true };
 }
 
 export async function updateKey(oldKeyOrMasked, newKey) {
   if (!newKey.startsWith('ms-')) return { ok: false, error: '新 Key 必须以 ms- 开头' };
-  const keys = await neonQuery('SELECT api_key FROM key_store');
-  const entry = keys.rows.find(k => k.api_key === oldKeyOrMasked || mask(k.api_key) === oldKeyOrMasked);
+  const data = await getData(getDefaultModel());
+  const entry = data.keys.find(k => k.key === oldKeyOrMasked || k.masked === oldKeyOrMasked);
   if (!entry) return { ok: false, error: '未找到原 Key' };
   try {
-    await neonQuery('DELETE FROM key_model_usage WHERE api_key = $1', [entry.api_key]);
-    await neonQuery('UPDATE key_store SET api_key = $1, cooldown_until = 0 WHERE api_key = $2', [newKey, entry.api_key]);
+    await neonQuery('DELETE FROM key_model_usage WHERE api_key = $1', [entry.key]);
+    await neonQuery('UPDATE key_store SET api_key = $1, cooldown_until = 0 WHERE api_key = $2', [newKey, entry.key]);
     for (const m of KNOWN_MODELS)
       await neonQuery('INSERT INTO key_model_usage (api_key, model, daily_count) VALUES ($1, $2, 0) ON CONFLICT DO NOTHING', [newKey, m]);
+    _dataCache = null;
     return { ok: true, masked: mask(newKey) };
   } catch (e) {
     if (e.message.includes('duplicate key')) return { ok: false, error: '新 Key 已存在' };
@@ -153,33 +174,56 @@ export async function updateKey(oldKeyOrMasked, newKey) {
 export async function mark429(key, cooldownMs = 300000) {
   const until = Date.now() + cooldownMs;
   await neonQuery('UPDATE key_store SET cooldown_until = $1, total_429 = total_429 + 1 WHERE api_key = $2', [until, key]);
+  _dataCache = null;
 }
 
+// pickAndUse 现在一次性返回 key + stats + pool，不再需要单独调 getKeyStats/getPoolStats
 export async function pickAndUse(model) {
   const m = model || getDefaultModel();
   const data = await getData(m);
   const selected = selectKey(data);
   if (!selected) return null;
+
+  // 预扣
   await neonQuery(
     'UPDATE key_model_usage SET daily_count = daily_count + 1 WHERE api_key = $1 AND model = $2',
     [selected.key, m]
   );
   await neonQuery('UPDATE key_store SET total_requests = total_requests + 1 WHERE api_key = $1', [selected.key]);
-  return selected.key;
+
+  // stats
+  const newDailyCount = selected.dailyCount + 1;
+  const stats = {
+    key: selected.key, masked: selected.masked,
+    dailyCount: newDailyCount, dailyLimit: data.dailyLimit,
+    remaining: data.dailyLimit - newDailyCount,
+  };
+  // pool（基于 getData 结果计算，无需再查库）
+  const now = Date.now();
+  const pool = {
+    model: m,
+    totalKeys: data.keys.length,
+    availableKeys: data.keys.filter(k =>
+      (k.key === selected.key
+        ? newDailyCount < data.dailyLimit
+        : k.dailyCount < data.dailyLimit && k.cooldownUntil <= now)
+    ).length,
+    dailyLimit: data.dailyLimit,
+  };
+
+  return { key: selected.key, stats, pool };
 }
 
 export async function getKeyStats(key, model) {
   const m = model || getDefaultModel();
-  const r = await neonQuery('SELECT * FROM key_model_usage WHERE api_key = $1 AND model = $2', [key, m]);
-  const ks = await neonQuery('SELECT cooldown_until FROM key_store WHERE api_key = $1', [key]);
-  if (r.rows.length === 0) return null;
-  const u = r.rows[0];
-  const limit = getDailyLimit();
+  const data = await getData(m);
+  const k = data.keys.find(x => x.key === key);
+  if (!k) return null;
   return {
-    key, masked: mask(key),
-    dailyCount: u.daily_count, dailyLimit: limit,
-    remaining: limit - u.daily_count,
-    cooldownUntil: ks.rows[0]?.cooldown_until || 0,
+    key: k.key, masked: k.masked,
+    dailyCount: k.dailyCount, dailyLimit: data.dailyLimit,
+    remaining: data.dailyLimit - k.dailyCount,
+    cooldownUntil: k.cooldownUntil,
   };
 }
 
@@ -208,7 +252,7 @@ export async function syncKeyFromHeaders(key, model, headers) {
       );
       return { limit, remaining, used };
     }
-  } catch {} // 静默
+  } catch {}
   return null;
 }
 
